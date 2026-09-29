@@ -80,7 +80,7 @@ def train(logdir, device, iterations, resume_iteration, checkpoint_interval, tra
         resume_iteration = 0
     else:
         model_path = os.path.join(logdir, f'model-{resume_iteration}.pt')
-        model = torch.load(model_path)
+        model = torch.load(model_path, weights_only=False)
         optimizer = torch.optim.Adam(model.parameters(), learning_rate)
         optimizer.load_state_dict(torch.load(os.path.join(logdir, 'last-optimizer-state.pt')))
 

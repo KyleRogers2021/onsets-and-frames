@@ -98,7 +98,7 @@ def evaluate_file(model_file, dataset, dataset_group, sequence_length, save_path
         kwargs['groups'] = [dataset_group]
     dataset = dataset_class(**kwargs)
 
-    model = torch.load(model_file, map_location=device).eval()
+    model = torch.load(model_file, map_location=device, weights_only=False).eval()
     summary(model)
 
     metrics = evaluate(tqdm(dataset), model, onset_threshold, frame_threshold, save_path)
