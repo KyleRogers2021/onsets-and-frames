@@ -16,6 +16,8 @@ Run from the onsets-and-frames folder, oaf environment active:
     python predict_oaf.py --dataset cocochorales      (CocoChorales brass test set)
     python predict_oaf.py --dataset choralebricks     (real recordings, from prepare_choralebricks.py)
     add --run <run folder> for a specific run (default: newest oaf_cocochorales run)
+    add --checkpoints 5000 10000 ... to run earlier checkpoints (default: 50000, the final one);
+        their predictions go to <dataset>_step<N> so the final results are never overwritten
 """
 import argparse
 import glob
@@ -34,7 +36,7 @@ from onsets_and_frames.loader_cocochorales import AUDIO_ROOT, INSTRUMENTS, N_KEY
 RUNS = r'R:\experiments\runs'
 PREDICTIONS = r'R:\experiments\predictions'
 TRACK_LIST = r'R:\splits\cocochorales_brass\test.txt'
-CHECKPOINT = 'model-50000.pt'      # final checkpoint, as decided
+FINAL_STEP = 50000                 # final checkpoint, as decided
 ONSET_THRESHOLD = 0.5              # original Onsets and Frames defaults, not tuned
 FRAME_THRESHOLD = 0.5
 HEADER = 'onset\toffset\tpitch\tvelocity\tinstrument\n'
@@ -75,32 +77,24 @@ def transcribe(model, wav_path):
     return sorted(notes)
 
 
-def main():
-    ap = argparse.ArgumentParser()
-    ap.add_argument('--run', help='run folder (default: newest oaf_cocochorales run)')
-    ap.add_argument('--dataset', required=True, choices=sorted(DATASETS))
-    a = ap.parse_args()
-    audio_root, split, track_list = DATASETS[a.dataset]
-    if a.run:
-        run_dir = a.run
-    else:
-        runs = sorted(glob.glob(os.path.join(RUNS, 'oaf_cocochorales-*')), key=os.path.getmtime)
-        if not runs:
-            sys.exit(f'No oaf_cocochorales run found in {RUNS}')
-        run_dir = runs[-1]
+def predict(run_dir, step, dataset):
+    audio_root, split, track_list = DATASETS[dataset]
     run_name = os.path.basename(os.path.normpath(run_dir))
-    ckpt = os.path.join(run_dir, CHECKPOINT)
-    out_dir = os.path.join(PREDICTIONS, run_name, a.dataset)
+    ckpt = os.path.join(run_dir, f'model-{step}.pt')
+    if not os.path.exists(ckpt):
+        print(f'\nCheckpoint not found, skipped: {ckpt}')
+        return
+    folder = dataset if step == FINAL_STEP else f'{dataset}_step{step}'
+    out_dir = os.path.join(PREDICTIONS, run_name, folder)
     os.makedirs(out_dir, exist_ok=True)
 
     with open(track_list) as f:
         tracks = f.read().split()
     todo = [t for t in tracks if not os.path.exists(os.path.join(out_dir, f'{t}.tsv'))]
-    print(f'Model:  {ckpt}')
+    print(f'\nModel:  {ckpt}')
     print(f'Output: {out_dir}')
-    print(f'{len(tracks)} tracks ({a.dataset}), {len(tracks) - len(todo)} already done, {len(todo)} to go')
+    print(f'{len(tracks)} tracks ({dataset}), {len(tracks) - len(todo)} already done, {len(todo)} to go')
     if not todo:
-        print('PREDICTIONS DONE')
         return
 
     model = load_model(ckpt)
@@ -120,15 +114,36 @@ def main():
             eta = el / k * (len(todo) - k)
             print(f'  {k}/{len(todo)} tracks  ({el / 60:.1f} min, about {eta / 60:.0f} min left)')
 
-    print('\nPredicted notes per instrument (this session):')
+    print('Predicted notes per instrument (this session):')
     for name, n in zip(INSTRUMENTS, per_inst):
         print(f'  {name:<9}{n:>9}')
-    if a.dataset == 'cocochorales':
+    if dataset == 'cocochorales' and step == FINAL_STEP:
         print('\nNext, score them (Miniforge Prompt, oaf):')
         print(f'  python R:\\code\\evaluation\\score_transcriptions.py --pred {out_dir} '
               f'--name {run_name}_cocochorales')
+
+
+def main():
+    ap = argparse.ArgumentParser()
+    ap.add_argument('--run', help='run folder (default: newest oaf_cocochorales run)')
+    ap.add_argument('--dataset', required=True, choices=sorted(DATASETS))
+    ap.add_argument('--checkpoints', type=int, nargs='+', default=[FINAL_STEP],
+                    help='training steps of the checkpoints to run (default: %(default)s)')
+    a = ap.parse_args()
+    if a.run:
+        run_dir = a.run
     else:
-        print('\nNext: python R:\\code\\evaluation\\score_choralebricks.py')
+        runs = sorted(glob.glob(os.path.join(RUNS, 'oaf_cocochorales-*')), key=os.path.getmtime)
+        if not runs:
+            sys.exit(f'No oaf_cocochorales run found in {RUNS}')
+        run_dir = runs[-1]
+    for step in a.checkpoints:
+        predict(run_dir, step, a.dataset)
+    if a.dataset == 'choralebricks':
+        if a.checkpoints != [FINAL_STEP]:
+            print('\nNext: python R:\\code\\evaluation\\score_checkpoints_choralebricks.py')
+        else:
+            print('\nNext: python R:\\code\\evaluation\\score_choralebricks.py')
     print('PREDICTIONS DONE')
 
 
