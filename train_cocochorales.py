@@ -14,13 +14,22 @@ from tqdm import tqdm
 from evaluate_cocochorales import evaluate  # CHANGED (CocoChorales): instrument-aware wrapper around the original evaluate()
 from onsets_and_frames import *
 from onsets_and_frames.loader_cocochorales import CocoChoralesBrass, N_OUTPUTS  # CHANGED (CocoChorales)
+from onsets_and_frames.loader_augment import CocoChoralesBrassAug  # CHANGED (augmentation)
+
+AUGMENT_VARIANTS = ('none', 'pitch', 'stems', 'both')  # CHANGED (augmentation)
 
 ex = Experiment('train_transcriber')
 
 
 @ex.config
 def config():
-    logdir = r'R:\experiments\runs\oaf_cocochorales-' + datetime.now().strftime('%y%m%d-%H%M%S')  # CHANGED (CocoChorales)
+    # CHANGED (augmentation): training data variant. 'none' = the original baseline data,
+    # 'pitch' = random pitch shift, 'stems' = random stem subsets, 'both' = both together.
+    augment = 'none'
+    pitch_shift_max = 5          # semitones, used by 'pitch' and 'both'
+    stem_subset_prob = 0.5       # share of clips built from 1-3 stems, used by 'stems' and 'both'
+    tag = '' if augment == 'none' else f'aug_{augment}-'
+    logdir = r'R:\experiments\runs\oaf_cocochorales-' + tag + datetime.now().strftime('%y%m%d-%H%M%S')  # CHANGED (CocoChorales)
     device = 'cuda' if torch.cuda.is_available() else 'cpu'
     iterations = 500000
     resume_iteration = None
@@ -53,7 +62,8 @@ def config():
 @ex.automain
 def train(logdir, device, iterations, resume_iteration, checkpoint_interval, train_on, batch_size, sequence_length,
           model_complexity, learning_rate, learning_rate_decay_steps, learning_rate_decay_rate, leave_one_out,
-          clip_gradient_norm, validation_length, validation_interval):
+          clip_gradient_norm, validation_length, validation_interval,
+          augment, pitch_shift_max, stem_subset_prob):
     print_config(ex.current_run)
 
     os.makedirs(logdir, exist_ok=True)
@@ -67,7 +77,16 @@ def train(logdir, device, iterations, resume_iteration, checkpoint_interval, tra
         validation_groups = [str(leave_one_out)]
 
     if train_on == 'CocoChoralesBrass':  # CHANGED (CocoChorales): new dataset option
-        dataset = CocoChoralesBrass('train', sequence_length=sequence_length)
+        if augment not in AUGMENT_VARIANTS:  # CHANGED (augmentation)
+            raise ValueError(f'augment must be one of {AUGMENT_VARIANTS}, not {augment!r}')
+        if augment == 'none':
+            dataset = CocoChoralesBrass('train', sequence_length=sequence_length)
+        else:
+            dataset = CocoChoralesBrassAug(
+                'train', sequence_length=sequence_length,
+                pitch_shift=pitch_shift_max if augment in ('pitch', 'both') else 0,
+                stem_prob=stem_subset_prob if augment in ('stems', 'both') else 0.0)
+        # validation always uses the un-augmented data, so all variants are compared the same way
         validation_dataset = CocoChoralesBrass('valid', list_name='valid_sample', sequence_length=validation_length)
     elif train_on == 'MAESTRO':
         dataset = MAESTRO(groups=train_groups, sequence_length=sequence_length)
