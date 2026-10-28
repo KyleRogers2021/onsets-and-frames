@@ -4,9 +4,10 @@ runs can go overnight without restarting anything by hand.
 
 Variants (pick any, in any order, repeats allowed; they run in the order given):
     none    the original baseline data
-    pitch   random pitch shift (+/-5 semitones unless --max-shift says otherwise)
+    pitch   random pitch shift (+/-5 semitones)
     stems   random stem subsets (half the clips use 1-3 instruments)
-    both    pitch shift and stem subsets together
+    both    pitch shift and stem subsets together (+/-5 semitones)
+For pitch and both, add :K for a different largest shift, e.g. both:3 = +/-3.
 
 Full runs (50,000 steps each, same settings as the baseline):
     python run_trainings.py --variants none both pitch stems
@@ -15,10 +16,10 @@ R:\experiments\runs\oaf_cocochorales-aug_both-<date>. Listing a variant twice
 (--variants pitch pitch) gives two separate runs.
 If one run fails, the queue moves on to the next. Ctrl+C stops the whole queue.
 
-Pitch-shift ablation: --max-shift K sets the largest shift for pitch and both
-(default 5). Runs with a size other than 5 get it in their folder name, e.g.
-oaf_cocochorales-aug_both_s3-<date>, so they never mix with the +/-5 runs:
-    python run_trainings.py --variants both both both --max-shift 3
+Pitch-shift ablation: runs with a size other than 5 get it in their folder
+name, e.g. oaf_cocochorales-aug_both_s3-<date>, so they never mix with the +/-5
+runs. Sizes can be mixed freely in one queue:
+    python run_trainings.py --variants pitch both:3 both:7 both:9
 
 Continue a stopped queue later with just:
     python run_trainings.py --resume
@@ -68,6 +69,22 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 
 
 FOLDER_RE = re.compile(r'oaf_cocochorales-(?:aug_(pitch|stems|both)(?:_s(\d+))?-)?(\d{6}-\d{6})$')
+
+
+def parse_variant(text):
+    """'both' -> ('both', 5), 'both:3' -> ('both', 3), 'none' -> ('none', 0)."""
+    name, _, k = text.partition(':')
+    if name not in VARIANTS:
+        raise ValueError(f'unknown variant {text!r}: use none, pitch, stems or both')
+    if not uses_shift(name):
+        if k:
+            raise ValueError(f'{text!r}: only pitch and both take a shift size')
+        return name, 0
+    if not k:
+        return name, DEFAULT_SHIFT
+    if not k.isdigit() or int(k) < 1:
+        raise ValueError(f'{text!r}: the shift size must be a whole number of semitones, 1 or more')
+    return name, int(k)
 
 
 def uses_shift(variant):
@@ -228,9 +245,8 @@ def save_examples(variant, shift=DEFAULT_SHIFT, n=3):
 
 def main():
     ap = argparse.ArgumentParser(description='Train several data variants one after another.')
-    ap.add_argument('--variants', nargs='+', choices=VARIANTS)
-    ap.add_argument('--max-shift', type=int, default=DEFAULT_SHIFT,
-                    help='largest pitch shift in semitones for pitch and both (default 5)')
+    ap.add_argument('--variants', nargs='+', metavar='VARIANT',
+                    help='none, pitch, stems, both; pitch:K / both:K for a +/-K shift (default 5)')
     ap.add_argument('--iterations', type=int, default=50000)
     ap.add_argument('--check', action='store_true', help='quick check: examples + 300-step runs')
     ap.add_argument('--resume', action='store_true',
@@ -250,12 +266,11 @@ def main():
     else:
         if not a.variants:
             ap.error('give --variants (or use --resume or --status)')
-        if a.max_shift < 1:
-            ap.error('--max-shift must be at least 1')
-        if a.max_shift != DEFAULT_SHIFT and not any(uses_shift(v) for v in a.variants):
-            ap.error('--max-shift only affects pitch and both, and none of those is in --variants')
-        entries = [dict(variant=v, shift=a.max_shift if uses_shift(v) else 0,
-                        steps=a.iterations, folder='') for v in a.variants]
+        try:
+            parsed = [parse_variant(v) for v in a.variants]
+        except ValueError as err:
+            ap.error(str(err))
+        entries = [dict(variant=v, shift=k, steps=a.iterations, folder='') for v, k in parsed]
         if not a.check:
             write_queue(entries)
     stamp = datetime.now().strftime('%y%m%d-%H%M%S')
