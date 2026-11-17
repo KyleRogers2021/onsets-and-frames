@@ -12,6 +12,11 @@ same 32 ms frames), plus two optional augmentations:
       are changed to match. The whole clip moves by the same amount, so the
       music stays in tune.
 
+  shift_range = (lo, hi)   (optional; overrides pitch_shift)
+      Same, but the shift is drawn from lo to hi (e.g. (-12, 3)), for a range
+      that is not symmetric. Leaving it out keeps the -K..+K behavior exactly,
+      including the random draws, so earlier runs are unaffected.
+
   stem_prob = p     (0 = off)
       With probability p, the clip is a mix of a random 1 to 3 of the four
       instrument stems instead of the full mix, and the labels keep only those
@@ -89,18 +94,23 @@ def build_labels(notes, n_steps, begin_sec, time_scale, pitch_shift, keep):
 
 class CocoChoralesBrassAug(Dataset):
     def __init__(self, split='train', sequence_length=327680, pitch_shift=0, stem_prob=0.0,
-                 seed=42, device=DEFAULT_DEVICE, audio_root=AUDIO_ROOT, label_root=LABEL_ROOT,
+                 seed=42, shift_range=None, device=DEFAULT_DEVICE, audio_root=AUDIO_ROOT, label_root=LABEL_ROOT,
                  split_root=SPLIT_ROOT):
         assert sequence_length is not None, 'augmented loader needs a sequence_length'
         self.split, self.sequence_length, self.device = split, sequence_length, device
         self.pitch_shift, self.stem_prob = int(pitch_shift), float(stem_prob)
+        if shift_range is None:
+            self.shift_lo, self.shift_hi = -self.pitch_shift, self.pitch_shift
+        else:
+            self.shift_lo, self.shift_hi = int(shift_range[0]), int(shift_range[1])
+            assert self.shift_lo <= 0 <= self.shift_hi, 'shift_range must include 0'
         self.random = np.random.RandomState(seed)
         self.audio_root, self.label_root = audio_root, label_root
         with open(os.path.join(split_root, f'{split}.txt')) as f:
             self.tracks = f.read().split()
         self.last = {}          # what was done to the most recent clip (for checks)
         print(f'CocoChoralesBrassAug: {len(self.tracks)} {split} tracks, '
-              f'pitch shift +/-{self.pitch_shift} semitones, '
+              f'pitch shift {self.shift_lo:+d} to {self.shift_hi:+d} semitones, '
               f'stem subsets for {self.stem_prob:.0%} of clips')
 
     def __len__(self):
@@ -114,7 +124,8 @@ class CocoChoralesBrassAug(Dataset):
         n_out = self.sequence_length
 
         # 1. pitch shift: pick one that fits in the track (shifting up needs more input)
-        shift = self.random.randint(-self.pitch_shift, self.pitch_shift + 1) if self.pitch_shift else 0
+        shift = self.random.randint(self.shift_lo, self.shift_hi + 1) \
+            if (self.shift_lo or self.shift_hi) else 0
         while True:
             up, down = shift_ratio(shift)
             n_in = int(np.ceil(n_out * down / up)) + down     # small margin for the filter
